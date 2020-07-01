@@ -38,19 +38,27 @@ class Group:
 
 
 def start(update, context):
-    update.message.reply_text("Я родилсо")
+    update.message.reply_text("Я родилсо \nВведите имя группы")
 
-    context.user_data['sum'] = 0
-    context.user_data['min_payment'] = 0
-    context.user_data['max_payment'] = 0
-    context.user_data['date_first_payment'] = None
+    if context.bot_data.get('groups') is None:
+        context.bot_data['groups'] = {}
+    return INIT_PHASE
 
-    with open('data.csv', "w", newline='') as csv_file:
-        writer = csv.writer(csv_file, delimiter=',')
-        writer.writerow(['Дата', 'Сумма'])
+
+def user_registration(update, context):
+    group_name = update.message.text
+    username = update.message.chat['username']
+    user_id = update.message.chat['id']
+
+    if group_name not in context.bot_data['groups'].keys():
+        context.bot_data['groups'][group_name] = Group(group_name)
+
+    context.bot_data['groups'][group_name].members[username] = {}
+    context.bot_data['groups'][group_name].members[username]['id'] = user_id
+    context.bot_data['groups'][group_name].members[username]['sum'] = 0
+    context.bot_data['groups'][group_name].members[username]['payments'] = []
 
     return MAIN_PHASE
-
 
 def add_payment(update, context):
     with open('data.csv', "a", newline='') as csv_file:
@@ -128,9 +136,7 @@ def main():
         entry_points=[CommandHandler('start', start)],
 
         states={
-            INIT_PHASE: [
-
-            ],
+            INIT_PHASE: [MessageHandler(Filters.regex('.+'), user_registration)],
             MAIN_PHASE: [
                 CommandHandler(('send',), send),
                 CommandHandler(('get_table',), get_csv),
