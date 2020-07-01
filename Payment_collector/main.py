@@ -35,6 +35,32 @@ class Group:
             writer = csv.writer(csv_file, delimiter=',')
             writer.writerow(['id', 'Пользователь', 'Дата', 'Сумма', 'Тип'])
 
+    def reg_member(self, user_id, username):
+        self.members[user_id] = {}
+        self.members[user_id]['username'] = username
+        self.members[user_id]['sum'] = 0
+        self.members[user_id]['payments'] = []
+
+    def calc_debts(self):
+        n = len(self.members)
+        mean = 0
+        for el in self.members.values():
+            mean += el['sum']
+        mean /= n
+
+        debts = []
+        for el in self.members.values():
+            debts.append((el['sum'] - mean)/n)
+
+        return debts
+
+
+def send_documnet(chat_id, file_path):
+    global updater
+
+    with open(file_path, "rb") as csv_file:
+        updater.bot.sendDocument(chat_id, csv_file)
+
 
 def start(update, context):
     update.message.reply_text("Я родилсо \nВведите имя группы")
@@ -56,10 +82,11 @@ def user_registration(update, context):
     if group_name not in context.bot_data['groups'].keys():
         context.bot_data['groups'][group_name] = Group(group_name)
 
-    context.bot_data['groups'][group_name].members[user_id] = {}
-    context.bot_data['groups'][group_name].members[user_id]['username'] = username
-    context.bot_data['groups'][group_name].members[user_id]['sum'] = 0
-    context.bot_data['groups'][group_name].members[user_id]['payments'] = []
+    context.bot_data['groups'][group_name].reg_member(user_id, username)
+    # context.bot_data['groups'][group_name].members[user_id] = {}
+    # context.bot_data['groups'][group_name].members[user_id]['username'] = username
+    # context.bot_data['groups'][group_name].members[user_id]['sum'] = 0
+    # context.bot_data['groups'][group_name].members[user_id]['payments'] = []
 
     context.bot_data['user_id_to_group_table'][user_id] = context.bot_data['groups'][group_name]
 
@@ -70,7 +97,7 @@ def user_registration(update, context):
 def add_payment(update, context):
     user_id = update.message.chat['id']
     group = context.bot_data['user_id_to_group_table'][user_id]
-    # group_name = group.group_name
+
     pay = int(update.message.text)
 
     context.user_data['tmp_lst'] = [str(user_id), str(group.members[user_id]['username']),
@@ -101,13 +128,10 @@ def select_category(update, context):
 
 
 def get_csv(update, context):
-    global updater
-
     user_id = update.message.chat['id']
     group = context.bot_data['user_id_to_group_table'][user_id]
 
-    with open(group.group_name + '_data.csv', "rb") as csv_file:
-        updater.bot.sendDocument(update.message.chat['id'], csv_file)
+    send_documnet(update.message.chat['id'], group.group_name + '_data.csv')
 
     return MAIN_PHASE
 
@@ -120,7 +144,28 @@ def get_sum(update, context):
     return MAIN_PHASE
 
 
-def get_stats(update, context):
+def show_debts(update, context):
+    user_id = update.message.chat['id']
+    group = context.bot_data['user_id_to_group_table'][user_id]
+
+    debts = group.calc_debts()
+    n = len(debts)
+    tmp_arr = [[0 for i in range(n)] for j in range(n)]
+    for i in range(n):
+        for j in range(i, n):
+            tmp_arr[i][j] = debts[j] - debts[i]
+            tmp_arr[j][i] = -tmp_arr[i][j]
+        tmp_arr[i][i] = 0
+
+    members_names = [el['username'] for el in group.members.values()]
+    with open('tmp.csv', "w", newline='') as csv_file:
+        writer = csv.writer(csv_file, delimiter=',')
+        writer.writerow([''] + members_names)
+        for i, el in enumerate(members_names):
+            writer.writerow([el] + tmp_arr[i])
+
+    send_documnet(update.message.chat['id'], 'tmp.csv')
+
     return MAIN_PHASE
 
 
@@ -129,16 +174,11 @@ def rage(update, context):
     return MAIN_PHASE
 
 
-def done(update, context):
+def broke(update, context):
     update.message.reply_text("Ойойойо")
     return MAIN_PHASE
 
 
-def send(update, context):
-    global updater
-    contacts = {'id': 193145859, 'username': 'stasiche'}
-    updater.bot.sendMessage(contacts['id'], 'hi')
-    return MAIN_PHASE
 
 
 def main():
@@ -158,10 +198,9 @@ def main():
         states={
             INIT_PHASE: [MessageHandler(Filters.regex('.+'), user_registration)],
             MAIN_PHASE: [
-                CommandHandler(('send',), send),
                 CommandHandler(('get_table',), get_csv),
                 CommandHandler(('get_sum',), get_sum),
-                CommandHandler(('get_stats',), get_stats),
+                CommandHandler(('show_debts',), show_debts),
                 MessageHandler(Filters.regex('\d+'), add_payment),
                 MessageHandler(Filters.regex('\D+'), rage),
             ],
@@ -170,7 +209,7 @@ def main():
             ],
         },
 
-        fallbacks=[MessageHandler(Filters.regex('.+'), done)],
+        fallbacks=[MessageHandler(Filters.regex('.+'), broke)],
         name="my_conversation",
         persistent=True
     )
