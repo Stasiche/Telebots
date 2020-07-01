@@ -19,16 +19,26 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 
 logger = logging.getLogger(__name__)
 
-MAIN_PHASE = range(1)
+INIT_PHASE, MAIN_PHASE = range(2)
 
 reply_keyboard = [['Get sum']]
 markup = ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True)
 updater = None
 
 
+class Group:
+    def __init__(self, group_name):
+        self.group_name = group_name
+        self.members = {}
+        self.first_date = None
+
+        with open(group_name + '_data.csv', "w", newline='') as csv_file:
+            writer = csv.writer(csv_file, delimiter=',')
+            writer.writerow(['Дата', 'Сумма'])
+
+
 def start(update, context):
-    reply_text = "Я родилсо"
-    update.message.reply_text(reply_text)
+    update.message.reply_text("Я родилсо")
 
     context.user_data['sum'] = 0
     context.user_data['min_payment'] = 0
@@ -96,6 +106,13 @@ def done(update, context):
     return MAIN_PHASE
 
 
+def send(update, context):
+    global updater
+    contacts = {'id': 193145859, 'username': 'stasiche'}
+    updater.bot.sendMessage(contacts['id'], 'hi')
+    return MAIN_PHASE
+
+
 def main():
     global updater
     # Create the Updater and pass it your bot's token.
@@ -111,7 +128,11 @@ def main():
         entry_points=[CommandHandler('start', start)],
 
         states={
+            INIT_PHASE: [
+
+            ],
             MAIN_PHASE: [
+                CommandHandler(('send',), send),
                 CommandHandler(('get_table',), get_csv),
                 CommandHandler(('get_sum',), get_sum),
                 CommandHandler(('get_stats',), get_stats),
