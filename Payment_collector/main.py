@@ -19,10 +19,9 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 
 logger = logging.getLogger(__name__)
 
-INIT_PHASE, MAIN_PHASE = range(2)
+INIT_PHASE, MAIN_PHASE, SELECT_CAT = range(3)
 
-reply_keyboard = [['Get sum']]
-markup = ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True)
+rm = ReplyKeyboardMarkup([['Delivery', 'Food'], ['Other']], one_time_keyboard=True)
 updater = None
 
 
@@ -34,7 +33,7 @@ class Group:
 
         with open(group_name + '_data.csv', "w", newline='') as csv_file:
             writer = csv.writer(csv_file, delimiter=',')
-            writer.writerow(['Дата', 'Сумма'])
+            writer.writerow(['id', 'Пользователь', 'Дата', 'Сумма', 'Тип'])
 
 
 def start(update, context):
@@ -42,10 +41,14 @@ def start(update, context):
 
     if context.bot_data.get('groups') is None:
         context.bot_data['groups'] = {}
+        context.bot_data['user_id_to_group_table'] = {}
+
     return INIT_PHASE
 
 
 def user_registration(update, context):
+    update.message.reply_text('Выбрана группа: ' + update.message.text)
+
     group_name = update.message.text
     username = update.message.chat['username']
     user_id = update.message.chat['id']
@@ -53,54 +56,71 @@ def user_registration(update, context):
     if group_name not in context.bot_data['groups'].keys():
         context.bot_data['groups'][group_name] = Group(group_name)
 
-    context.bot_data['groups'][group_name].members[username] = {}
-    context.bot_data['groups'][group_name].members[username]['id'] = user_id
-    context.bot_data['groups'][group_name].members[username]['sum'] = 0
-    context.bot_data['groups'][group_name].members[username]['payments'] = []
+    context.bot_data['groups'][group_name].members[user_id] = {}
+    context.bot_data['groups'][group_name].members[user_id]['username'] = username
+    context.bot_data['groups'][group_name].members[user_id]['sum'] = 0
+    context.bot_data['groups'][group_name].members[user_id]['payments'] = []
 
+    context.bot_data['user_id_to_group_table'][user_id] = context.bot_data['groups'][group_name]
+
+    update.message.reply_text('Вводи цену')
     return MAIN_PHASE
 
+
 def add_payment(update, context):
-    with open('data.csv', "a", newline='') as csv_file:
-        writer = csv.writer(csv_file, delimiter=',')
-        writer.writerow([str(update.message.date + timedelta(hours=3)), str(update.message.text)])
-
+    user_id = update.message.chat['id']
+    group = context.bot_data['user_id_to_group_table'][user_id]
+    # group_name = group.group_name
     pay = int(update.message.text)
-    context.user_data['sum'] += pay
 
-    if pay < context.user_data['min_payment']:
-        context.user_data['min_payment'] = pay
-    elif pay > context.user_data['max_payment']:
-        context.user_data['max_payment'] = pay
+    context.user_data['tmp_lst'] = [str(user_id), str(group.members[user_id]['username']),
+                                    str(update.message.date + timedelta(hours=3)), str(update.message.text)]
 
-    if context.user_data['date_first_payment'] is None:
-        context.user_data['date_first_payment'] = str(update.message.date + timedelta(hours=3))
-        context.user_data['min_payment'] = pay
-        context.user_data['max_payment'] = pay
+    group.members[user_id]['sum'] += pay
+    group.members[user_id]['payments'].append((str(update.message.date + timedelta(hours=3)), str(update.message.text)))
 
-    update.message.reply_text('Добавлено, текущая сумма: {}', context.user_data['sum'])
+    if group.first_date is None:
+        group.first_date = str(update.message.date + timedelta(hours=3))
+
+    update.message.reply_text('Выберите категорию', reply_markup=rm)
+
+    return SELECT_CAT
+
+
+def select_category(update, context):
+    user_id = update.message.chat['id']
+    group = context.bot_data['user_id_to_group_table'][user_id]
+
+    with open(group.group_name + '_data.csv', "a", newline='') as csv_file:
+        writer = csv.writer(csv_file, delimiter=',')
+        writer.writerow(context.user_data['tmp_lst'] + [str(update.message.text)])
+
+    update.message.reply_text('Добавлено, текущая сумма: {}\nВводи исчо'.format(group.members[user_id]['sum']))
 
     return MAIN_PHASE
 
 
 def get_csv(update, context):
     global updater
-    with open(r"data.csv", "rb") as file:
-        updater.bot.sendDocument(update.message.chat['id'], file)
+
+    user_id = update.message.chat['id']
+    group = context.bot_data['user_id_to_group_table'][user_id]
+
+    with open(group.group_name + '_data.csv', "rb") as csv_file:
+        updater.bot.sendDocument(update.message.chat['id'], csv_file)
 
     return MAIN_PHASE
 
 
 def get_sum(update, context):
-    update.message.reply_text(context.user_data['sum'])
+    user_id = update.message.chat['id']
+    group = context.bot_data['user_id_to_group_table'][user_id]
+
+    update.message.reply_text(group.members[user_id]['sum'])
     return MAIN_PHASE
 
 
 def get_stats(update, context):
-    update.message.reply_text('Сумма: {}, Мин/макс: {}/{}, Начало периода: {}: '.format(context.user_data['sum'],
-                                                                                        context.user_data['min_payment'],
-                                                                                        context.user_data['max_payment'],
-                                                                                        context.user_data['date_first_payment'],))
     return MAIN_PHASE
 
 
@@ -144,6 +164,9 @@ def main():
                 CommandHandler(('get_stats',), get_stats),
                 MessageHandler(Filters.regex('\d+'), add_payment),
                 MessageHandler(Filters.regex('\D+'), rage),
+            ],
+            SELECT_CAT: [
+                MessageHandler(Filters.regex('^(Delivery|Food|Other)$'), select_category),
             ],
         },
 
