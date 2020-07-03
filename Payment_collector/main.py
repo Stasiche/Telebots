@@ -12,6 +12,8 @@ from telegram.ext import (Updater, CommandHandler, MessageHandler, Filters,
 
 import csv
 import logging
+import os
+import shutil
 
 # Enable logging
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -25,23 +27,61 @@ rm = ReplyKeyboardMarkup([['Delivery', 'Food'], ['Other']], one_time_keyboard=Tr
 updater = None
 
 
+def create_new_data_file(path):
+    with open(path, "w", newline='') as csv_file:
+        writer = csv.writer(csv_file, delimiter=',')
+        writer.writerow(['id', 'Пользователь', 'Дата', 'Сумма', 'Тип'])
+
+
+def send_debts(user_id, debts):
+    with open('tmp.csv', "w", newline='') as csv_file:
+        writer = csv.writer(csv_file, delimiter=',')
+        for el in debts:
+            writer.writerow(el)
+
+        send_document(user_id, 'tmp.csv')
+
+
+def send_document(chat_id, file_path):
+    global updater
+
+    with open(file_path, "rb") as csv_file:
+        updater.bot.sendDocument(chat_id, csv_file)
+
+
 class Group:
-    def __init__(self, group_name):
+    def __init__(self, group_name, archive_path=None):
         self.group_name = group_name
         self.members = {}
         self.first_date = None
 
-        with open(group_name + '_data.csv', "w", newline='') as csv_file:
-            writer = csv.writer(csv_file, delimiter=',')
-            writer.writerow(['id', 'Пользователь', 'Дата', 'Сумма', 'Тип'])
+        create_new_data_file(self.group_name + '_data.csv')
+
+        if archive_path is None:
+            self.archive_path = os.path.join('.', os.path.join('Archives', self.group_name))
+        else:
+            self.archive_path = archive_path
 
     def reg_member(self, user_id, username):
         self.members[user_id] = {}
         self.members[user_id]['username'] = username
+        self.reset_member(user_id)
+
+    def reset_member(self, user_id):
         self.members[user_id]['sum'] = 0
         self.members[user_id]['payments'] = []
 
-    def calc_debts(self):
+    def archive_payments(self):
+        if not os.path.exists(self.archive_path):
+            os.makedirs(self.archive_path)
+
+        shutil.copy2(self.group_name + '_data.csv', os.path.join(self.archive_path, self.group_name + '_data.csv'))
+        create_new_data_file(self.group_name + '_data.csv')
+
+        for user_id in self.members.keys():
+            self.reset_member(user_id)
+
+    def get_debts(self):
         n = len(self.members)
         mean = 0
         for el in self.members.values():
@@ -52,14 +92,32 @@ class Group:
         for el in self.members.values():
             debts.append((el['sum'] - mean)/n)
 
-        return debts
+        n = len(debts)
+        tmp_arr = [[0 for i in range(n)] for j in range(n)]
+        for i in range(n):
+            for j in range(i, n):
+                tmp_arr[i][j] = debts[j] - debts[i]
+                tmp_arr[j][i] = -tmp_arr[i][j]
+            tmp_arr[i][i] = 0
 
+        members_names = [el['username'] for el in self.members.values()]
 
-def send_documnet(chat_id, file_path):
-    global updater
+        debts_table = [[''] + members_names]
+        for i, el in enumerate(members_names):
+            debts_table.append([el] + tmp_arr[i])
 
-    with open(file_path, "rb") as csv_file:
-        updater.bot.sendDocument(chat_id, csv_file)
+        return debts_table
+
+    def sync_members(self):
+        global updater
+        debts = self.get_debts()
+        for member_id in self.members.keys():
+            if self.members[member_id]['username'] == 'stasiche':
+                updater.bot.sendMessage(member_id, 'Енто синхронизация \nВот общая таблица')
+                send_debts(member_id, debts)
+
+                updater.bot.sendMessage(member_id, 'Енто синхронизация \nВот общая таблица')
+
 
 
 def start(update, context):
@@ -83,10 +141,6 @@ def user_registration(update, context):
         context.bot_data['groups'][group_name] = Group(group_name)
 
     context.bot_data['groups'][group_name].reg_member(user_id, username)
-    # context.bot_data['groups'][group_name].members[user_id] = {}
-    # context.bot_data['groups'][group_name].members[user_id]['username'] = username
-    # context.bot_data['groups'][group_name].members[user_id]['sum'] = 0
-    # context.bot_data['groups'][group_name].members[user_id]['payments'] = []
 
     context.bot_data['user_id_to_group_table'][user_id] = context.bot_data['groups'][group_name]
 
@@ -131,7 +185,7 @@ def get_csv(update, context):
     user_id = update.message.chat['id']
     group = context.bot_data['user_id_to_group_table'][user_id]
 
-    send_documnet(update.message.chat['id'], group.group_name + '_data.csv')
+    send_document(update.message.chat['id'], group.group_name + '_data.csv')
 
     return MAIN_PHASE
 
@@ -148,24 +202,25 @@ def show_debts(update, context):
     user_id = update.message.chat['id']
     group = context.bot_data['user_id_to_group_table'][user_id]
 
-    debts = group.calc_debts()
-    n = len(debts)
-    tmp_arr = [[0 for i in range(n)] for j in range(n)]
-    for i in range(n):
-        for j in range(i, n):
-            tmp_arr[i][j] = debts[j] - debts[i]
-            tmp_arr[j][i] = -tmp_arr[i][j]
-        tmp_arr[i][i] = 0
+    debts = group.get_debts()
+    send_debts(id, debts)
 
-    members_names = [el['username'] for el in group.members.values()]
-    with open('tmp.csv', "w", newline='') as csv_file:
-        writer = csv.writer(csv_file, delimiter=',')
-        writer.writerow([''] + members_names)
-        for i, el in enumerate(members_names):
-            writer.writerow([el] + tmp_arr[i])
+    return MAIN_PHASE
 
-    send_documnet(update.message.chat['id'], 'tmp.csv')
 
+def reset(update, context):
+    user_id = update.message.chat['id']
+    group = context.bot_data['user_id_to_group_table'][user_id]
+
+    group.reset_member(user_id)
+    return MAIN_PHASE
+
+
+def sync_members(update, context):
+    user_id = update.message.chat['id']
+    group = context.bot_data['user_id_to_group_table'][user_id]
+
+    group.sync_members()
     return MAIN_PHASE
 
 
@@ -198,9 +253,11 @@ def main():
         states={
             INIT_PHASE: [MessageHandler(Filters.regex('.+'), user_registration)],
             MAIN_PHASE: [
-                CommandHandler(('get_table',), get_csv),
-                CommandHandler(('get_sum',), get_sum),
-                CommandHandler(('show_debts',), show_debts),
+                CommandHandler(('table',), get_csv),
+                CommandHandler(('sum',), get_sum),
+                CommandHandler(('debts',), show_debts),
+                CommandHandler(('reset',), reset),
+                CommandHandler(('sync',), sync_members),
                 MessageHandler(Filters.regex('\d+'), add_payment),
                 MessageHandler(Filters.regex('\D+'), rage),
             ],
